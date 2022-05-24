@@ -213,7 +213,48 @@ func (e *hjsonEncoder) str(value reflect.Value, noIndent bool, separator string,
 			e.WriteString("null")
 			return nil
 		}
-		return e.str(value.Elem(),noIndent,separator,isRootObject)
+		return e.str(value.Elem(), noIndent, separator, isRootObject)
+	}
+
+	if om, ok := value.Interface().(OrderedMap); ok {
+		len := len(om.Map)
+		if len == 0 {
+			e.WriteString(separator)
+			e.WriteString("{}")
+			return nil
+		}
+
+		indent1 := e.indent
+		if !isRootObject || e.EmitRootBraces {
+			if !noIndent && !e.BracesSameLine {
+				e.writeIndent(e.indent)
+			} else {
+				e.WriteString(separator)
+			}
+
+			e.indent++
+			e.WriteString("{")
+		}
+
+		// Join all of the member texts together, separated with newlines
+		for i := 0; i < len; i++ {
+			if i > 0 || !isRootObject || e.EmitRootBraces {
+				e.writeIndent(e.indent)
+			}
+			e.WriteString(e.quoteName(om.Keys[i]))
+			e.WriteString(":")
+			if err := e.str(reflect.ValueOf(om.Map[om.Keys[i]]), false, " ", false); err != nil {
+				return err
+			}
+		}
+
+		if !isRootObject || e.EmitRootBraces {
+			e.writeIndent(indent1)
+			e.WriteString("}")
+		}
+		e.indent = indent1
+
+		return nil
 	}
 
 	if value.Type().Implements(marshaler) {

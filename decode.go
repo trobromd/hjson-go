@@ -7,10 +7,16 @@ import (
 	"strings"
 )
 
+type OrderedMap struct {
+	Map  map[string]interface{}
+	Keys []string
+}
+
 type hjsonParser struct {
-	data []byte
-	at   int  // The index of the current character
-	ch   byte // The current character
+	data          []byte
+	at            int  // The index of the current character
+	ch            byte // The current character
+	useOrderedMap bool
 }
 
 func (p *hjsonParser) resetAt() {
@@ -345,10 +351,20 @@ func (p *hjsonParser) readArray() (value interface{}, err error) {
 	return nil, p.errAt("End of input while parsing an array (did you forget a closing ']'?)")
 }
 
+func (p *hjsonParser) returnObject(om OrderedMap) interface{} {
+	if p.useOrderedMap {
+		return om
+	} else {
+		return om.Map
+	}
+}
+
 func (p *hjsonParser) readObject(withoutBraces bool) (value interface{}, err error) {
 	// Parse an object value.
 
-	object := make(map[string]interface{})
+	om := OrderedMap{
+		Map: make(map[string]interface{}),
+	}
 
 	if !withoutBraces {
 		// assuming ch == '{'
@@ -358,7 +374,7 @@ func (p *hjsonParser) readObject(withoutBraces bool) (value interface{}, err err
 	p.white()
 	if p.ch == '}' && !withoutBraces {
 		p.next()
-		return object, nil // empty object
+		return p.returnObject(om), nil // empty object
 	}
 	for p.ch > 0 {
 		var key string
@@ -375,7 +391,8 @@ func (p *hjsonParser) readObject(withoutBraces bool) (value interface{}, err err
 		if val, err = p.readValue(); err != nil {
 			return nil, err
 		}
-		object[key] = val
+		om.Map[key] = val
+		om.Keys = append(om.Keys, key)
 		p.white()
 		// in Hjson the comma is optional and trailing commas are allowed
 		if p.ch == ',' {
@@ -384,13 +401,13 @@ func (p *hjsonParser) readObject(withoutBraces bool) (value interface{}, err err
 		}
 		if p.ch == '}' && !withoutBraces {
 			p.next()
-			return object, nil
+			return p.returnObject(om), nil
 		}
 		p.white()
 	}
 
 	if withoutBraces {
-		return object, nil
+		return p.returnObject(om), nil
 	}
 	return nil, p.errAt("End of input while parsing an object (did you forget a closing '}'?)")
 }
@@ -455,14 +472,6 @@ func (p *hjsonParser) checkTrailing(v interface{}, err error) (interface{}, erro
 // Marshal uses, allocating maps, slices, and pointers as necessary.
 //
 func Unmarshal(data []byte, v interface{}) (err error) {
-	var value interface{}
-	parser := &hjsonParser{data, 0, ' '}
-	parser.resetAt()
-	value, err = parser.rootValue()
-	if err != nil {
-		return err
-	}
-
 	rv := reflect.ValueOf(v)
 	if rv.Kind() != reflect.Ptr || rv.IsNil() {
 		return fmt.Errorf("non-pointer %v", reflect.TypeOf(v))
@@ -470,11 +479,26 @@ func Unmarshal(data []byte, v interface{}) (err error) {
 	for rv.Kind() == reflect.Ptr {
 		rv = rv.Elem()
 	}
+
+	var value interface{}
+	parser := &hjsonParser{
+		data,
+		0,
+		' ',
+		rv.Type() == reflect.TypeOf(OrderedMap{}),
+	}
+	parser.resetAt()
+	value, err = parser.rootValue()
+	if err != nil {
+		return err
+	}
+
 	defer func() {
 		if e := recover(); e != nil {
 			err = fmt.Errorf("%v", e)
 		}
 	}()
 	rv.Set(reflect.ValueOf(value))
+
 	return err
 }
